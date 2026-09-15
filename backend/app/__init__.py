@@ -1,0 +1,1 @@
+"""SNMP Monitor FastAPI application."""

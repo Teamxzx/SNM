@@ -1,0 +1,66 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "../vendor/shadcn-tailwind-4.13.0.css";
+
+:root {
+  --background: #06101b;
+  --foreground: #e2e8f0;
+  --card: #0b1726;
+  --card-foreground: #e2e8f0;
+  --popover: #0f1d2d;
+  --popover-foreground: #e2e8f0;
+  --primary: #22d3ee;
+  --primary-foreground: #06101b;
+  --secondary: #172538;
+  --secondary-foreground: #e2e8f0;
+  --muted: #152235;
+  --muted-foreground: #94a3b8;
+  --accent: #1d3046;
+  --accent-foreground: #f8fafc;
+  --destructive: #f43f5e;
+  --border: #24364b;
+  --input: #314258;
+  --ring: #22d3ee;
+  --chart-1: #22d3ee;
+  --chart-2: #a78bfa;
+  --chart-3: #34d399;
+  --chart-4: #fbbf24;
+  --chart-5: #fb7185;
+  --radius: 0.75rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "Segoe UI", "Noto Sans Thai", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", Consolas, monospace;
+}
+
+* { border-color: var(--border); }
+html { color-scheme: dark; }
+body { margin: 0; background: var(--background); color: var(--foreground); font-family: var(--font-sans); }
+button { cursor: pointer; }
+.monitor-card { border: 1px solid rgba(51, 65, 85, .68); border-radius: .85rem; background: linear-gradient(145deg, rgba(13, 27, 43, .98), rgba(8, 20, 33, .98)); box-shadow: inset 0 1px 0 rgba(255,255,255,.025), 0 16px 36px rgba(0,0,0,.13); }
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: #081421; }
+::-webkit-scrollbar-thumb { background: #26384d; border-radius: 999px; }
