@@ -5,9 +5,9 @@ import dynamic from "next/dynamic";
 import { ReactFlow, Background, Controls, type Edge, type Node, Position } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
-  Activity, BellRing, ChevronRight, CircleGauge, Clock3, EthernetPort,
-  GitBranch, Menu, Network, Plus, Radio, RefreshCw, Router, Search,
-  Server, ShieldCheck, TriangleAlert, X, Zap,
+  Activity, BellRing, ChevronDown, ChevronRight, CircleGauge, Clock3, EthernetPort,
+  GitBranch, LayoutDashboard, ListFilter, Menu, Network, Plus, Radio, RefreshCw, Router, Search,
+  Server, ShieldCheck, TableProperties, TriangleAlert, X, Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -19,7 +19,7 @@ import { cn } from "@/lib/utils";
 const ReactECharts = dynamic(() => import("echarts-for-react"), { ssr: false });
 type DeviceStatus = "online" | "warning" | "offline";
 type PortStatus = "up" | "down" | "warning";
-type View = "monitor" | "topology" | "events";
+type View = "dashboard" | "problems" | "hosts" | "latest" | "topology" | "events" | "monitor";
 type Period = "day" | "week" | "month" | "year";
 
 type Port = { id: number; if_index: number; if_name: string; if_descr: string; admin_status: number; oper_status: number; speed_bps: number; last_change: string; status: PortStatus; in_mbps: number; out_mbps: number };
@@ -50,12 +50,14 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000/api";
 const statusStyle = (status: DeviceStatus | PortStatus) => status === "online" || status === "up" ? "bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,.45)]" : status === "warning" ? "bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,.4)]" : "bg-rose-500 shadow-[0_0_10px_rgba(244,63,94,.4)]";
 
 function DeviceGlyph({ type, className }: { type: Device["device_type"]; className?: string }) { return type === "router" ? <Router className={className} /> : <Server className={className} />; }
-function AppMark() { return <div className="relative flex size-10 items-center justify-center rounded-xl bg-cyan-400 text-slate-950 shadow-[0_0_28px_rgba(34,211,238,.22)]"><Network className="size-5" strokeWidth={2.3} /><span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full border-2 border-[#07111d] bg-emerald-400" /></div>; }
+function AppMark() { return <div className="relative flex size-9 items-center justify-center rounded-sm bg-red-600 text-white shadow-[0_6px_18px_rgba(220,38,38,.22)]"><Network className="size-5" strokeWidth={2.3} /><span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full border-2 border-[#20242a] bg-emerald-400" /></div>; }
 
+/* Legacy summary card kept as a reference for the dark host-detail widgets.
 function SummaryCard({ icon, label, value, note, tone = "cyan" }: { icon: React.ReactNode; label: string; value: string; note: string; tone?: "cyan" | "green" | "rose" }) {
   const tones = { cyan: "bg-cyan-400/10 text-cyan-300 ring-cyan-300/15", green: "bg-emerald-400/10 text-emerald-300 ring-emerald-300/15", rose: "bg-rose-400/10 text-rose-300 ring-rose-300/15" };
   return <div className="monitor-card flex min-w-0 items-center gap-3 p-3.5"><div className={cn("flex size-10 shrink-0 items-center justify-center rounded-xl ring-1", tones[tone])}>{icon}</div><div className="min-w-0"><p className="text-[0.76rem] font-medium uppercase tracking-[0.08em] text-slate-500">{label}</p><div className="mt-0.5 flex items-baseline gap-2"><strong className="text-xl font-semibold tracking-tight text-slate-100">{value}</strong><span className="truncate text-xs text-slate-500">{note}</span></div></div></div>;
 }
+*/
 
 function AddDeviceDialog({ open, onOpenChange, onAdded }: { open: boolean; onOpenChange: (open: boolean) => void; onAdded: (device: Device) => void }) {
   const [version, setVersion] = useState<"2c" | "3">("2c");
@@ -126,7 +128,55 @@ function Topology({ devices, onSelect }: { devices: Device[]; onSelect: (id: num
   return <section className="monitor-card h-[680px] overflow-hidden"><header className="flex items-center justify-between border-b border-slate-800 px-5 py-4"><div><h2 className="text-lg font-semibold text-white">Network Topology</h2><p className="mt-0.5 text-xs text-slate-500">ค้นพบลิงก์จาก LLDP/CDP ผ่าน SNMP</p></div><span className="rounded-lg bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-300">{edges.length} discovered links</span></header><div className="h-[610px] bg-[radial-gradient(circle_at_center,rgba(34,211,238,.05),transparent_45%)]"><ReactFlow nodes={nodes} edges={edges} fitView colorMode="dark" minZoom={0.5} maxZoom={1.5}><Background color="#1e3448" gap={24} size={1} /><Controls position="bottom-right" /></ReactFlow></div></section>;
 }
 
-export function MonitorApp() {
+type ProblemRow = { id: string; time: string; severity: "Disaster" | "High" | "Warning" | "Info"; host: string; problem: string; duration: string; status: "PROBLEM" | "RESOLVED" };
+
+function SeverityBadge({ severity }: { severity: ProblemRow["severity"] }) {
+  const styles = { Disaster: "bg-red-700 text-white", High: "bg-red-500 text-white", Warning: "bg-amber-400 text-amber-950", Info: "bg-sky-500 text-white" };
+  return <span className={cn("inline-flex min-w-20 justify-center rounded-sm px-2 py-1 text-[11px] font-bold", styles[severity])}>{severity}</span>;
+}
+
+function PageHeader({ eyebrow, title, detail, action }: { eyebrow: string; title: string; detail: string; action?: React.ReactNode }) {
+  return <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-[11px] font-bold uppercase tracking-[0.14em] text-red-600">{eyebrow}</p><h2 className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{title}</h2><p className="mt-1 text-sm text-slate-500">{detail}</p></div>{action}</div>;
+}
+
+function DashboardOverview({ devices, events, onHost, onView }: { devices: Device[]; events: TrapEvent[]; onHost: (id: number) => void; onView: (view: View) => void }) {
+  const allPorts = devices.flatMap((device) => device.ports.map((port) => ({ ...port, device })));
+  const down = allPorts.filter((port) => port.status === "down");
+  const warning = allPorts.filter((port) => port.status === "warning");
+  const activeCount = down.length + warning.length;
+  const problems: ProblemRow[] = [
+    ...down.slice(0, 4).map((port, i) => ({ id: `down-${port.device.id}-${port.id}`, time: i === 0 ? "2m 14s" : `${12 + i * 9}m`, severity: (i === 0 ? "High" : "Warning") as ProblemRow["severity"], host: port.device.name, problem: `${port.if_name}: Link down`, duration: i === 0 ? "00:02:14" : `00:${12 + i * 9}:08`, status: "PROBLEM" as const })),
+    ...warning.slice(0, 2).map((port) => ({ id: `warn-${port.device.id}-${port.id}`, time: "41m", severity: "Warning" as const, host: port.device.name, problem: `${port.if_name}: Interface state unknown`, duration: "00:41:22", status: "PROBLEM" as const })),
+  ];
+  const traffic = [...allPorts].sort((a, b) => (b.in_mbps + b.out_mbps) - (a.in_mbps + a.out_mbps)).slice(0, 5);
+  const maxTraffic = Math.max(...traffic.map((port) => port.in_mbps + port.out_mbps), 1);
+  return <div className="mx-auto max-w-[1600px] space-y-5">
+    <PageHeader eyebrow="Monitoring" title="ภาพรวมระบบเครือข่าย" detail="สถานะล่าสุดจาก SNMP polling และเหตุการณ์ linkUp / linkDown จาก Trap" action={<div className="flex items-center gap-2"><button className="zbx-filter"><ListFilter className="size-4" /> ตัวกรอง</button><button className="zbx-filter"><RefreshCw className="size-4" /> อัปเดต</button></div>} />
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <button onClick={() => onView("hosts")} className="zbx-kpi text-left"><span className="zbx-kpi-icon bg-emerald-50 text-emerald-600"><Server /></span><span><small>Hosts available</small><strong>{devices.filter((item) => item.status !== "offline").length}<em> / {devices.length}</em></strong><i className="text-emerald-600">SNMP agents responding</i></span></button>
+      <button onClick={() => onView("problems")} className="zbx-kpi text-left"><span className="zbx-kpi-icon bg-red-50 text-red-600"><TriangleAlert /></span><span><small>Active problems</small><strong>{activeCount}</strong><i className="text-red-600">{down.length} interfaces down</i></span></button>
+      <button onClick={() => onView("latest")} className="zbx-kpi text-left"><span className="zbx-kpi-icon bg-sky-50 text-sky-600"><Activity /></span><span><small>Traffic throughput</small><strong>{allPorts.reduce((n, p) => n + p.in_mbps + p.out_mbps, 0).toFixed(0)} <em>Mbps</em></strong><i className="text-slate-500">{allPorts.length} monitored interfaces</i></span></button>
+      <button onClick={() => onView("events")} className="zbx-kpi text-left"><span className="zbx-kpi-icon bg-violet-50 text-violet-600"><BellRing /></span><span><small>Traps today</small><strong>{events.length}</strong><i className="text-slate-500">UDP 162 receiver active</i></span></button>
+    </div>
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,.75fr)]">
+      <section className="zbx-panel overflow-hidden"><div className="zbx-panel-head"><div><h3>Problems</h3><p>เหตุการณ์ที่ต้องตรวจสอบ เรียงตามความรุนแรง</p></div><button onClick={() => onView("problems")}>ดูทั้งหมด <ChevronRight /></button></div><div className="overflow-auto"><table className="zbx-table min-w-[760px]"><thead><tr><th>Age</th><th>Severity</th><th>Host</th><th>Problem</th><th>Duration</th><th>Status</th></tr></thead><tbody>{problems.slice(0, 6).map((row) => <tr key={row.id}><td className="font-mono text-slate-500">{row.time}</td><td><SeverityBadge severity={row.severity} /></td><td><button onClick={() => onHost(devices.find((d) => d.name === row.host)?.id ?? 1)} className="font-semibold text-red-700 hover:underline">{row.host}</button></td><td className="font-medium text-slate-800">{row.problem}</td><td className="font-mono text-slate-500">{row.duration}</td><td><span className="rounded-sm bg-red-50 px-2 py-1 text-[11px] font-bold text-red-700">{row.status}</span></td></tr>)}</tbody></table></div></section>
+      <section className="zbx-panel"><div className="zbx-panel-head"><div><h3>Host availability</h3><p>ภาพรวมการเข้าถึงผ่าน SNMP</p></div></div><div className="divide-y divide-slate-100">{devices.map((device) => { const up = device.ports.filter((p) => p.status === "up").length; return <button key={device.id} onClick={() => onHost(device.id)} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-slate-50"><span className={cn("size-2.5 rounded-full", device.status === "online" ? "bg-emerald-500" : device.status === "warning" ? "bg-amber-400" : "bg-red-500")} /><span className="min-w-0 flex-1"><strong className="block truncate text-sm text-slate-800">{device.name}</strong><small className="font-mono text-slate-500">{device.ip_address}</small></span><span className="text-right"><b className="block text-sm text-slate-700">{up}/{device.ports.length}</b><small className="text-slate-400">ports up</small></span></button>; })}</div></section>
+    </div>
+    <div className="grid gap-5 xl:grid-cols-2"><section className="zbx-panel"><div className="zbx-panel-head"><div><h3>Top interface utilization</h3><p>พอร์ตที่มี traffic สูงสุด ณ ตอนนี้</p></div><button onClick={() => onView("latest")}>Latest data <ChevronRight /></button></div><div className="space-y-4 p-4">{traffic.map((port) => { const total = port.in_mbps + port.out_mbps; return <button key={`${port.device.id}-${port.id}`} onClick={() => onHost(port.device.id)} className="block w-full text-left"><div className="mb-1.5 flex items-center justify-between text-xs"><span><b className="text-slate-800">{port.device.name}</b><span className="mx-1.5 text-slate-300">/</span><span className="font-mono text-slate-500">{port.if_name}</span></span><b className="text-slate-700">{total.toFixed(1)} Mbps</b></div><div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-gradient-to-r from-sky-500 to-indigo-500" style={{ width: `${Math.max(8, total / maxTraffic * 100)}%` }} /></div></button>; })}</div></section><EventStream events={events.slice(0, 5)} /></div>
+  </div>;
+}
+
+function HostsView({ devices, onHost }: { devices: Device[]; onHost: (id: number) => void }) {
+  return <div className="mx-auto max-w-[1500px] space-y-5"><PageHeader eyebrow="Data collection" title="Hosts" detail="อุปกรณ์ Router และ Switch ที่ระบบกำลังตรวจสอบผ่าน SNMP" /><section className="zbx-panel overflow-hidden"><div className="zbx-toolbar"><div className="relative"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" /><Input placeholder="ค้นหาชื่อหรือ IP address" className="w-80 border-slate-300 bg-white pl-9 text-slate-800" /></div><span className="text-sm text-slate-500">{devices.length} hosts</span></div><div className="overflow-auto"><table className="zbx-table min-w-[900px]"><thead><tr><th>Host</th><th>Interfaces</th><th>Availability</th><th>Status</th><th>SNMP</th><th>Last seen</th><th /></tr></thead><tbody>{devices.map((device) => <tr key={device.id}><td><button onClick={() => onHost(device.id)} className="text-left"><strong className="block text-sm text-red-700 hover:underline">{device.name}</strong><span className="text-xs text-slate-500">{device.sys_descr}</span></button></td><td><span className="rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">{device.ports.length} interfaces</span></td><td><span className={cn("inline-flex items-center gap-1.5 text-xs font-semibold", device.status === "offline" ? "text-red-600" : "text-emerald-600")}><span className={cn("size-2 rounded-full", device.status === "offline" ? "bg-red-500" : "bg-emerald-500")} />{device.status === "offline" ? "Unavailable" : "Available"}</span></td><td className="capitalize text-slate-700">{device.status}</td><td className="font-mono text-slate-600">v{device.snmp_version} · {device.ip_address}</td><td className="text-slate-500">{device.last_seen}</td><td><button onClick={() => onHost(device.id)} className="zbx-link">Port view <ChevronRight /></button></td></tr>)}</tbody></table></div></section></div>;
+}
+
+function LatestDataView({ devices, onHost }: { devices: Device[]; onHost: (id: number) => void }) {
+  const rows = devices.flatMap((device) => device.ports.map((port) => ({ device, port }))).slice(0, 40);
+  return <div className="mx-auto max-w-[1500px] space-y-5"><PageHeader eyebrow="Monitoring" title="Latest data" detail="ค่า interface ล่าสุดจาก IF-MIB พร้อมอัตรา Receive / Sent ที่คำนวณเป็น Mbps" /><section className="zbx-panel overflow-hidden"><div className="zbx-toolbar"><button className="zbx-filter"><ListFilter className="size-4" /> Host group: All</button><button className="zbx-filter">Interface: All <ChevronDown className="size-4" /></button><span className="ml-auto text-sm text-slate-500">Updated 5 seconds ago</span></div><div className="overflow-auto"><table className="zbx-table min-w-[920px]"><thead><tr><th>Host</th><th>Interface</th><th>Status</th><th>Speed</th><th>Receive</th><th>Sent</th><th>Last change</th></tr></thead><tbody>{rows.map(({ device, port }) => <tr key={`${device.id}-${port.id}`}><td><button onClick={() => onHost(device.id)} className="font-semibold text-red-700 hover:underline">{device.name}</button></td><td><strong className="font-mono text-slate-800">{port.if_name}</strong><span className="ml-2 text-xs text-slate-400">{port.if_descr}</span></td><td><span className={cn("font-semibold capitalize", port.status === "up" ? "text-emerald-600" : port.status === "warning" ? "text-amber-600" : "text-red-600")}>{port.status}</span></td><td>{port.speed_bps / 1_000_000_000} Gbps</td><td className="font-mono text-sky-700">{port.in_mbps} Mbps</td><td className="font-mono text-indigo-700">{port.out_mbps} Mbps</td><td className="text-slate-500">{port.last_change}</td></tr>)}</tbody></table></div></section></div>;
+}
+
+/* Previous dashboard shell retained here temporarily for migration reference.
+function LegacyMonitorApp() {
   const [devices, setDevices] = useState<Device[]>(demoDevices); const [events, setEvents] = useState<TrapEvent[]>(demoEvents); const [deviceId, setDeviceId] = useState(1); const [portId, setPortId] = useState(1); const [view, setView] = useState<View>("monitor"); const [period, setPeriod] = useState<Period>("day"); const [addOpen, setAddOpen] = useState(false); const [mobileNav, setMobileNav] = useState(false); const [connected, setConnected] = useState(false);
   useEffect(() => { let socket: WebSocket | undefined; let cancelled = false; Promise.all([fetch(`${API_URL}/devices`), fetch(`${API_URL}/events?limit=30`)]).then(async ([dr, er]) => { if (dr.ok) { const data = await dr.json(); if (!cancelled && data.length) setDevices(data); } if (er.ok) { const data = await er.json(); if (!cancelled && data.length) setEvents(data); } }).catch(() => undefined); try { socket = new WebSocket(API_URL.replace(/^http/, "ws").replace(/\/api$/, "/ws")); socket.onopen = () => setConnected(true); socket.onclose = () => setConnected(false); socket.onmessage = (message) => { const payload = JSON.parse(message.data); if (payload.type === "trap") setEvents((current) => [payload.data, ...current].slice(0, 100)); if (payload.type === "device_update") setDevices((current) => current.map((item) => item.id === payload.data.id ? payload.data : item)); }; } catch { setConnected(false); } return () => { cancelled = true; socket?.close(); }; }, []);
   useEffect(() => { const context = (document as Document & { modelContext?: { registerTool?: (tool: unknown, options?: unknown) => void } }).modelContext; if (!context?.registerTool) return; const lifecycle = new AbortController(); try { context.registerTool({ name: "select_monitored_device", title: "Select monitored device", description: "Open the monitor view for a device already visible in the dashboard.", inputSchema: { type: "object", properties: { deviceId: { type: "number" } }, required: ["deviceId"], additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: (input: unknown) => { const id = Number((input as { deviceId?: number }).deviceId); if (!devices.some((item) => item.id === id)) throw new Error("Unknown deviceId"); setDeviceId(id); setView("monitor"); return { selectedDeviceId: id }; } }, { signal: lifecycle.signal }); } catch {} return () => lifecycle.abort(); }, [devices]);
@@ -138,4 +188,92 @@ export function MonitorApp() {
   <header className="sticky top-0 z-40 flex h-16 items-center border-b border-slate-800/90 bg-[#07111d]/95 px-4 backdrop-blur xl:px-6"><button type="button" className="mr-3 lg:hidden" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu /></button><div className="flex items-center gap-3"><AppMark /><div><h1 className="text-base font-bold tracking-[0.04em] text-white">NOC LAB</h1><p className="text-[10px] uppercase tracking-[0.15em] text-slate-500">SNMP Network Monitor</p></div></div><div className="ml-auto flex items-center gap-2 sm:gap-4"><div className="hidden items-center gap-2 rounded-full border border-slate-800 px-3 py-1.5 text-xs text-slate-400 sm:flex"><span className={cn("size-2 rounded-full", connected ? "bg-emerald-400" : "bg-amber-400")} />{connected ? "Realtime connected" : "Demo data"}</div><button type="button" className="relative rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-white"><BellRing className="size-4" /><span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-rose-400" /></button><Button onClick={() => setAddOpen(true)} size="sm" className="bg-cyan-400 text-slate-950 hover:bg-cyan-300"><Plus /><span className="hidden sm:inline">เพิ่มอุปกรณ์</span></Button></div></header>
   <div className="flex min-h-[calc(100vh-4rem)]">{mobileNav && <button type="button" aria-label="Close navigation" className="fixed inset-0 z-40 bg-black/60 lg:hidden" onClick={() => setMobileNav(false)} />}<aside className={cn("fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-slate-800 bg-[#081421] transition-transform lg:sticky lg:top-16 lg:z-20 lg:h-[calc(100vh-4rem)] lg:translate-x-0", mobileNav ? "translate-x-0" : "-translate-x-full")}><div className="flex h-16 items-center justify-between border-b border-slate-800 px-4 lg:hidden"><span className="font-semibold">เมนู</span><button onClick={() => setMobileNav(false)}><X /></button></div><nav className="p-3"><p className="px-2 pb-2 pt-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">Workspace</p>{navItems.map((item) => <button type="button" key={item.id} onClick={() => { setView(item.id); setMobileNav(false); }} className={cn("mb-1 flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition", view === item.id ? "bg-cyan-400/10 text-cyan-300 ring-1 ring-cyan-400/10" : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200")}><item.icon className="size-4" />{item.label}{item.id === "events" && <span className="ml-auto rounded-full bg-rose-400/10 px-2 py-0.5 text-[10px] text-rose-300">{events.length}</span>}</button>)}</nav><div className="mx-3 border-t border-slate-800" /><div className="flex min-h-0 flex-1 flex-col p-3"><div className="flex items-center justify-between px-2 py-2"><p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">Devices</p><span className="text-[10px] text-slate-600">{devices.length} total</span></div><div className="space-y-1 overflow-y-auto">{devices.map((item) => <button type="button" key={item.id} onClick={() => selectDevice(item.id)} className={cn("group flex w-full items-center gap-3 rounded-xl border px-3 py-3 text-left transition", device?.id === item.id && view === "monitor" ? "border-slate-600 bg-slate-800/65" : "border-transparent hover:border-slate-800 hover:bg-slate-900/50")}><span className="relative flex size-9 items-center justify-center rounded-lg bg-slate-800 text-slate-400"><DeviceGlyph type={item.device_type} className="size-4" /><span className={cn("absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-[#081421]", statusStyle(item.status))} /></span><span className="min-w-0"><strong className="block truncate text-xs font-semibold text-slate-200">{item.name}</strong><span className="font-mono text-[10px] text-slate-600">{item.ip_address}</span></span><ChevronRight className="ml-auto size-3 text-slate-700 group-hover:text-slate-400" /></button>)}</div></div><div className="border-t border-slate-800 p-3"><div className="rounded-xl bg-slate-950/40 p-3"><div className="flex items-center gap-2 text-xs text-slate-400"><ShieldCheck className="size-4 text-emerald-300" />Trap receiver active</div><p className="mt-1.5 font-mono text-[10px] text-slate-600">0.0.0.0:162/udp</p></div></div></aside>
   <main className="min-w-0 flex-1 p-4 xl:p-5">{view === "monitor" && device && <div className="mx-auto max-w-[1720px] space-y-4"><div className="grid grid-cols-2 gap-3 xl:grid-cols-4"><SummaryCard icon={<Radio className="size-5" />} label="Devices online" value={`${devices.filter((item) => item.status !== "offline").length}/${devices.length}`} note="SNMP agents" tone="green" /><SummaryCard icon={<EthernetPort className="size-5" />} label="Interfaces" value={String(totalPorts)} note={`${downPorts} down`} /><SummaryCard icon={<Activity className="size-5" />} label="Throughput" value="412" note="Mbps total" /><SummaryCard icon={<TriangleAlert className="size-5" />} label="Active alerts" value={String(events.filter((item) => item.severity === "critical").length)} note="link events" tone="rose" /></div><div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(520px,1fr)_390px]"><DevicePanel device={device} selectedPort={port} onSelectPort={(selected) => setPortId(selected.id)} /><PortDetails deviceId={device.id} port={port} period={period} onPeriod={setPeriod} onToggle={togglePort} /></div><EventStream events={events.slice(0, 6)} /></div>}{view === "topology" && <div className="mx-auto max-w-[1400px]"><Topology devices={devices} onSelect={selectDevice} /></div>}{view === "events" && <div className="mx-auto max-w-[1400px] space-y-4"><div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.12em] text-cyan-300">Event log</p><h2 className="mt-1 text-2xl font-semibold text-white">SNMP Trap Events</h2><p className="mt-1 text-sm text-slate-500">เฉพาะ linkUp และ linkDown ที่รับผ่าน Trap Receiver</p></div><div className="relative"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-600" /><Input placeholder="ค้นหา device หรือ interface" className="w-72 border-slate-700 bg-slate-900 pl-9" /></div></div><EventStream events={events} full /></div>}</main></div></div>;
+}
+*/
+
+export function MonitorApp() {
+  const [devices, setDevices] = useState<Device[]>(demoDevices);
+  const [events, setEvents] = useState<TrapEvent[]>(demoEvents);
+  const [deviceId, setDeviceId] = useState(1);
+  const [portId, setPortId] = useState(1);
+  const [view, setView] = useState<View>("dashboard");
+  const [period, setPeriod] = useState<Period>("day");
+  const [addOpen, setAddOpen] = useState(false);
+  const [mobileNav, setMobileNav] = useState(false);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    let socket: WebSocket | undefined;
+    let cancelled = false;
+    Promise.all([fetch(`${API_URL}/devices`), fetch(`${API_URL}/events?limit=30`)]).then(async ([dr, er]) => {
+      if (dr.ok) { const data = await dr.json(); if (!cancelled && data.length) setDevices(data); }
+      if (er.ok) { const data = await er.json(); if (!cancelled && data.length) setEvents(data); }
+    }).catch(() => undefined);
+    try {
+      socket = new WebSocket(API_URL.replace(/^http/, "ws").replace(/\/api$/, "/ws"));
+      socket.onopen = () => setConnected(true);
+      socket.onclose = () => setConnected(false);
+      socket.onmessage = (message) => { const payload = JSON.parse(message.data); if (payload.type === "trap") setEvents((current) => [payload.data, ...current].slice(0, 100)); if (payload.type === "device_update") setDevices((current) => current.map((item) => item.id === payload.data.id ? payload.data : item)); };
+    } catch { /* WebSocket is optional in demo mode. */ }
+    return () => { cancelled = true; socket?.close(); };
+  }, []);
+
+  useEffect(() => {
+    const context = (document as Document & { modelContext?: { registerTool?: (tool: unknown, options?: unknown) => void } }).modelContext;
+    if (!context?.registerTool) return;
+    const lifecycle = new AbortController();
+    try { context.registerTool({ name: "select_monitored_device", title: "Select monitored device", description: "Open the port view for a monitored device.", inputSchema: { type: "object", properties: { deviceId: { type: "number" } }, required: ["deviceId"], additionalProperties: false }, annotations: { readOnlyHint: true, untrustedContentHint: false }, execute: (input: unknown) => { const id = Number((input as { deviceId?: number }).deviceId); if (!devices.some((item) => item.id === id)) throw new Error("Unknown deviceId"); setDeviceId(id); setView("monitor"); return { selectedDeviceId: id }; } }, { signal: lifecycle.signal }); } catch {}
+    return () => lifecycle.abort();
+  }, [devices]);
+
+  const device = devices.find((item) => item.id === deviceId) ?? devices[0];
+  const port = device?.ports.find((item) => item.id === portId) ?? device?.ports[0] ?? makePort(1, "down");
+  const downPorts = devices.reduce((total, item) => total + item.ports.filter((candidate) => candidate.status === "down").length, 0);
+  const activeProblems = downPorts + devices.reduce((total, item) => total + item.ports.filter((candidate) => candidate.status === "warning").length, 0);
+
+  function selectDevice(id: number) { setDeviceId(id); setPortId(1); setView("monitor"); setMobileNav(false); }
+  async function togglePort() {
+    const nextAdmin = port.admin_status === 1 ? 2 : 1;
+    try { await fetch(`${API_URL}/devices/${device.id}/interfaces/${port.if_index}/admin`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ admin_status: nextAdmin }) }); } catch {}
+    setDevices((current) => current.map((item) => item.id !== device.id ? item : { ...item, ports: item.ports.map((candidate) => candidate.id !== port.id ? candidate : { ...candidate, admin_status: nextAdmin, oper_status: nextAdmin, status: nextAdmin === 1 ? "up" : "down" }) }));
+  }
+
+  const navigation: { group: string; items: { id: View; label: string; icon: typeof CircleGauge; badge?: number }[] }[] = [
+    { group: "Monitoring", items: [
+      { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+      { id: "problems", label: "Problems", icon: TriangleAlert, badge: activeProblems },
+      { id: "hosts", label: "Hosts", icon: Server },
+      { id: "latest", label: "Latest data", icon: TableProperties },
+      { id: "topology", label: "Network map", icon: GitBranch },
+    ] },
+    { group: "Events", items: [{ id: "events", label: "SNMP traps", icon: BellRing, badge: events.length }] },
+  ];
+
+  const problemRows: ProblemRow[] = devices.flatMap((item) => item.ports.filter((candidate) => candidate.status !== "up").map((candidate, index) => ({ id: `${item.id}-${candidate.id}`, time: index === 0 ? "2m 14s" : `${18 + index * 7}m`, severity: candidate.status === "down" ? "High" : "Warning", host: item.name, problem: `${candidate.if_name}: ${candidate.status === "down" ? "Link down" : "Operational status unknown"}`, duration: candidate.last_change, status: "PROBLEM" as const })));
+
+  return <div className="min-h-screen bg-[#f3f4f6] text-slate-800">
+    <AddDeviceDialog open={addOpen} onOpenChange={setAddOpen} onAdded={(added) => { setDevices((current) => [...current, added]); setDeviceId(added.id); setView("monitor"); }} />
+    <header className="sticky top-0 z-40 flex h-14 items-center border-b border-slate-800 bg-[#20242a] px-3 text-white shadow-sm lg:px-5">
+      <button type="button" className="mr-3 rounded p-1.5 hover:bg-white/10 lg:hidden" onClick={() => setMobileNav(true)} aria-label="Open navigation"><Menu className="size-5" /></button>
+      <div className="flex items-center gap-2.5"><AppMark /><div><h1 className="text-sm font-bold tracking-[0.08em]">NOC LAB</h1><p className="text-[9px] uppercase tracking-[0.16em] text-slate-400">Network monitoring</p></div></div>
+      <div className="ml-auto flex items-center gap-2 sm:gap-3"><div className="hidden items-center gap-2 text-xs text-slate-300 sm:flex"><span className={cn("size-2 rounded-full", connected ? "bg-emerald-400" : "bg-amber-400")} />{connected ? "Realtime connected" : "Demo mode"}</div><button type="button" onClick={() => setView("problems")} className="relative rounded p-2 text-slate-300 hover:bg-white/10"><BellRing className="size-4" />{activeProblems > 0 && <span className="absolute right-0.5 top-0.5 flex size-4 items-center justify-center rounded-full bg-red-600 text-[9px] font-bold text-white">{activeProblems}</span>}</button><Button onClick={() => setAddOpen(true)} size="sm" className="h-8 rounded-sm bg-red-600 text-white hover:bg-red-700"><Plus className="size-4" /><span className="hidden sm:inline">เพิ่มอุปกรณ์</span></Button></div>
+    </header>
+    <div className="flex min-h-[calc(100vh-3.5rem)]">
+      {mobileNav && <button type="button" aria-label="Close navigation" className="fixed inset-0 z-40 bg-black/50 lg:hidden" onClick={() => setMobileNav(false)} />}
+      <aside className={cn("fixed inset-y-0 left-0 z-50 flex w-[238px] flex-col border-r border-slate-800 bg-[#292e34] text-slate-300 transition-transform lg:sticky lg:top-14 lg:z-20 lg:h-[calc(100vh-3.5rem)] lg:translate-x-0", mobileNav ? "translate-x-0" : "-translate-x-full")}>
+        <div className="flex h-14 items-center justify-between border-b border-slate-700 px-4 lg:hidden"><span className="font-semibold">เมนู</span><button onClick={() => setMobileNav(false)}><X /></button></div>
+        <nav className="min-h-0 flex-1 overflow-y-auto py-3">{navigation.map((section) => <div key={section.group} className="mb-4"><p className="px-4 pb-1.5 text-[10px] font-bold uppercase tracking-[0.13em] text-slate-500">{section.group}</p>{section.items.map((item) => <button type="button" key={item.id} onClick={() => { setView(item.id); setMobileNav(false); }} className={cn("flex w-full items-center gap-3 border-l-[3px] px-4 py-2.5 text-left text-[13px] transition", view === item.id || (item.id === "hosts" && view === "monitor") ? "border-red-500 bg-[#1f2328] text-white" : "border-transparent text-slate-300 hover:bg-white/5 hover:text-white")}><item.icon className="size-4" />{item.label}{item.badge !== undefined && <span className={cn("ml-auto rounded-full px-2 py-0.5 text-[10px] font-bold", item.id === "problems" ? "bg-red-600 text-white" : "bg-slate-700 text-slate-200")}>{item.badge}</span>}</button>)}</div>)}</nav>
+        <div className="border-t border-slate-700 p-3"><div className="rounded border border-slate-700 bg-[#23272d] p-3"><div className="flex items-center gap-2 text-xs font-semibold text-slate-200"><ShieldCheck className="size-4 text-emerald-400" />Trap receiver</div><p className="mt-1.5 font-mono text-[10px] text-slate-500">ACTIVE · UDP 162</p></div></div>
+      </aside>
+      <main className="min-w-0 flex-1 p-4 md:p-6">
+        {view === "dashboard" && <DashboardOverview devices={devices} events={events} onHost={selectDevice} onView={setView} />}
+        {view === "hosts" && <HostsView devices={devices} onHost={selectDevice} />}
+        {view === "latest" && <LatestDataView devices={devices} onHost={selectDevice} />}
+        {view === "problems" && <div className="mx-auto max-w-[1500px] space-y-5"><PageHeader eyebrow="Monitoring" title="Problems" detail="ปัญหาที่ยังไม่ถูกแก้ไขจากสถานะ interface และ SNMP Trap" /><section className="zbx-panel overflow-hidden"><div className="zbx-toolbar"><button className="zbx-filter"><ListFilter className="size-4" /> Severity: All</button><button className="zbx-filter">Status: Problem <ChevronDown className="size-4" /></button><span className="ml-auto text-sm text-slate-500">{problemRows.length} problems</span></div><div className="overflow-auto"><table className="zbx-table min-w-[850px]"><thead><tr><th>Age</th><th>Severity</th><th>Host</th><th>Problem</th><th>Duration</th><th>Status</th></tr></thead><tbody>{problemRows.map((row) => <tr key={row.id}><td className="font-mono text-slate-500">{row.time}</td><td><SeverityBadge severity={row.severity} /></td><td><button onClick={() => selectDevice(devices.find((item) => item.name === row.host)?.id ?? 1)} className="font-semibold text-red-700 hover:underline">{row.host}</button></td><td className="font-medium">{row.problem}</td><td>{row.duration}</td><td><span className="rounded-sm bg-red-50 px-2 py-1 text-[11px] font-bold text-red-700">PROBLEM</span></td></tr>)}</tbody></table></div></section></div>}
+        {view === "monitor" && device && <div className="mx-auto max-w-[1720px] space-y-5"><PageHeader eyebrow="Host detail" title={device.name} detail={`${device.ip_address} · ${device.sys_descr}`} action={<button onClick={() => setView("hosts")} className="zbx-filter">← กลับไป Hosts</button>} /><div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(520px,1fr)_390px]"><DevicePanel device={device} selectedPort={port} onSelectPort={(selected) => setPortId(selected.id)} /><PortDetails deviceId={device.id} port={port} period={period} onPeriod={setPeriod} onToggle={togglePort} /></div><EventStream events={events.slice(0, 6)} /></div>}
+        {view === "topology" && <div className="mx-auto max-w-[1450px] space-y-5"><PageHeader eyebrow="Monitoring" title="Network map" detail="Topology ที่ค้นพบจาก LLDP/CDP พร้อมสถานะอุปกรณ์แบบ realtime" /><Topology devices={devices} onSelect={selectDevice} /></div>}
+        {view === "events" && <div className="mx-auto max-w-[1450px] space-y-5"><PageHeader eyebrow="Events" title="SNMP Trap events" detail="รายการ linkUp และ linkDown ที่รับจากอุปกรณ์ผ่าน UDP port 162" /><EventStream events={events} full /></div>}
+      </main>
+    </div>
+  </div>;
 }
