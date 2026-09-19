@@ -34,6 +34,15 @@ OIDS = {
     "ifLastChange": "1.3.6.1.2.1.2.2.1.9",
     "ifHCInOctets": "1.3.6.1.2.1.31.1.1.1.6",
     "ifHCOutOctets": "1.3.6.1.2.1.31.1.1.1.10",
+    # LLDP-MIB (standard) and CISCO-CDP-MIB.  Both are optional on a device,
+    # so a device that does not advertise either protocol simply returns no links.
+    "lldpLocPortId": "1.0.8802.1.1.2.1.3.7.1.3",
+    "lldpRemLocalPortNum": "1.0.8802.1.1.2.1.4.1.1.2",
+    "lldpRemPortId": "1.0.8802.1.1.2.1.4.1.1.7",
+    "lldpRemSysName": "1.0.8802.1.1.2.1.4.1.1.9",
+    "cdpCacheIfIndex": "1.3.6.1.4.1.9.9.23.1.2.1.1.1",
+    "cdpCacheDeviceId": "1.3.6.1.4.1.9.9.23.1.2.1.1.6",
+    "cdpCacheDevicePort": "1.3.6.1.4.1.9.9.23.1.2.1.1.7",
 }
 
 
@@ -63,6 +72,17 @@ def _raise_on_error(error_indication, error_status, error_index):
         raise RuntimeError(f"{error_status.prettyPrint()} at index {error_index}")
 
 
+def _text(value) -> str:
+    """Decode SNMP OctetString values instead of showing their 0x hexadecimal form."""
+    if hasattr(value, "asOctets"):
+        raw = value.asOctets()
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw.decode("latin-1", errors="replace")
+    return value.prettyPrint()
+
+
 async def get_system(device):
     engine = SnmpEngine()
     try:
@@ -74,7 +94,7 @@ async def get_system(device):
             lookupMib=False,
         )
         _raise_on_error(error_indication, error_status, error_index)
-        values = [value.prettyPrint() for _, value in var_binds]
+        values = [_text(value) for _, value in var_binds]
         return {"sys_name": values[0], "sys_descr": values[1], "sys_uptime_ticks": int(values[2])}
     finally:
         engine.close_dispatcher()
@@ -92,7 +112,25 @@ async def _walk_column(engine, device, oid):
             numeric_oid = name.prettyPrint()
             if not numeric_oid.startswith(f"{oid}."):
                 return values
-            values[int(numeric_oid.rsplit(".", 1)[1])] = value.prettyPrint()
+            values[int(numeric_oid.rsplit(".", 1)[1])] = _text(value)
+    return values
+
+
+async def _walk_indexed(engine, device, oid):
+    """Walk a table whose index has more than one number (LLDP/CDP tables)."""
+    values = {}
+    iterator = walk_cmd(
+        engine, _auth(device), await _target(device["ip_address"]), ContextData(),
+        ObjectType(ObjectIdentity(oid)), lexicographicMode=False, lookupMib=False,
+    )
+    async for error_indication, error_status, error_index, var_binds in iterator:
+        _raise_on_error(error_indication, error_status, error_index)
+        for name, value in var_binds:
+            numeric_oid = name.prettyPrint()
+            if not numeric_oid.startswith(f"{oid}."):
+                return values
+            suffix = numeric_oid[len(oid) + 1 :]
+            values[tuple(int(part) for part in suffix.split("."))] = _text(value)
     return values
 
 
@@ -118,6 +156,50 @@ async def walk_interfaces(device):
                 "out_octets": int(columns["ifHCOutOctets"].get(index, 0)),
             })
         return interfaces
+    finally:
+        engine.close_dispatcher()
+
+
+async def discover_topology(device):
+    """Read neighbouring devices advertised through LLDP and, when present, CDP."""
+    engine = SnmpEngine()
+    try:
+        local_ports = await _walk_indexed(engine, device, OIDS["lldpLocPortId"])
+        lldp_local_numbers = await _walk_indexed(engine, device, OIDS["lldpRemLocalPortNum"])
+        lldp_remote_ports = await _walk_indexed(engine, device, OIDS["lldpRemPortId"])
+        lldp_remote_names = await _walk_indexed(engine, device, OIDS["lldpRemSysName"])
+
+        links = []
+        for index, remote_name in lldp_remote_names.items():
+            if not remote_name or remote_name in {"No Such Instance currently exists at this OID", "No Such Object currently exists at this OID"}:
+                continue
+            local_number = int(lldp_local_numbers.get(index, 0) or 0)
+            local_port = local_ports.get((local_number,), str(local_number))
+            links.append({
+                "local_port_name": local_port,
+                "remote_device_name": remote_name,
+                "remote_port_name": lldp_remote_ports.get(index, "unknown"),
+                "protocol": "LLDP",
+            })
+
+        cdp_if_indices = await _walk_indexed(engine, device, OIDS["cdpCacheIfIndex"])
+        cdp_remote_names = await _walk_indexed(engine, device, OIDS["cdpCacheDeviceId"])
+        cdp_remote_ports = await _walk_indexed(engine, device, OIDS["cdpCacheDevicePort"])
+        for index, remote_name in cdp_remote_names.items():
+            if not remote_name or remote_name in {"No Such Instance currently exists at this OID", "No Such Object currently exists at this OID"}:
+                continue
+            links.append({
+                "local_if_index": int(cdp_if_indices.get(index, index[0] if index else 0) or 0),
+                "remote_device_name": remote_name,
+                "remote_port_name": cdp_remote_ports.get(index, "unknown"),
+                "protocol": "CDP",
+            })
+
+        unique = {}
+        for link in links:
+            key = (link.get("local_if_index"), link.get("local_port_name"), link["remote_device_name"].strip().lower(), link["remote_port_name"].strip().lower(), link["protocol"])
+            unique[key] = link
+        return list(unique.values())
     finally:
         engine.close_dispatcher()
 

@@ -10,8 +10,8 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import connect, device_dict, event_dict, initialize_database, row_dict, seed_demo_data
-from .schemas import AdminStatusUpdate, DemoTrapCreate, DeviceCreate
-from .snmp_client import get_system, set_admin_status, walk_interfaces
+from .schemas import AdminStatusUpdate, DemoTrapCreate, DeviceCreate, TopologyEndpointCreate
+from .snmp_client import discover_topology, get_system, set_admin_status, walk_interfaces
 from .trap_receiver import TrapReceiver
 
 
@@ -75,6 +75,30 @@ def persist_interfaces(device_id: int, interfaces: list[dict]):
                 db.execute("INSERT INTO traffic_samples(interface_id, sampled_at, in_mbps, out_mbps, in_octets, out_octets) VALUES(?,?,?,?,?,?)", (current["id"], now, in_delta * 8 / seconds / 1_000_000, out_delta * 8 / seconds / 1_000_000, interface["in_octets"], interface["out_octets"]))
 
 
+def canonical_port_name(value: str) -> str:
+    return (value or "").lower().replace("gigabitethernet", "gi").replace("fastethernet", "fa").replace("tengigabitethernet", "te").replace("ethernet", "eth").replace(" ", "")
+
+
+def persist_topology_links(device_id: int, interfaces: list[dict], discovered: list[dict]):
+    """Replace one device's discovered neighbours only after a successful walk."""
+    port_indices = {canonical_port_name(interface["if_name"]): interface["if_index"] for interface in interfaces}
+    port_indices.update({canonical_port_name(interface["if_descr"]): interface["if_index"] for interface in interfaces})
+    records = []
+    for link in discovered:
+        if_index = link.get("local_if_index") or port_indices.get(canonical_port_name(link.get("local_port_name", "")))
+        if not if_index:
+            continue
+        records.append((device_id, int(if_index), link["remote_device_name"].strip(), link["remote_port_name"].strip(), link["protocol"], datetime.now(timezone.utc).isoformat()))
+    with connect() as db:
+        # A MANUAL link represents VPCS/PC endpoints.  It must survive the
+        # periodic LLDP/CDP refresh because those endpoints have no SNMP agent.
+        db.execute("DELETE FROM topology_links WHERE local_device_id=? AND protocol IN ('LLDP', 'CDP')", (device_id,))
+        db.executemany(
+            "INSERT OR REPLACE INTO topology_links(local_device_id, local_if_index, remote_device_name, remote_port_name, protocol, discovered_at) VALUES(?,?,?,?,?,?)",
+            records,
+        )
+
+
 async def poll_one(device: dict):
     if DEMO_MODE and device["ip_address"].startswith("10.10.0."):
         return
@@ -83,6 +107,14 @@ async def poll_one(device: dict):
         with connect() as db:
             db.execute("UPDATE devices SET name=?, sys_descr=?, sys_uptime_ticks=?, status='online', last_seen=? WHERE id=?", (system["sys_name"] or device["name"], system["sys_descr"], system["sys_uptime_ticks"], datetime.now(timezone.utc).isoformat(), device["id"]))
         persist_interfaces(device["id"], interfaces)
+        try:
+            links = await discover_topology(device)
+            persist_topology_links(device["id"], interfaces, links)
+            await hub.broadcast({"type": "topology_update"})
+        except Exception as exc:
+            # Topology discovery is a bonus feature; unsupported LLDP/CDP must
+            # never turn an otherwise healthy SNMP device offline.
+            LOGGER.debug("Topology discovery skipped for %s: %s", device["ip_address"], exc)
         with connect() as db:
             updated = device_dict(db, db.execute("SELECT * FROM devices WHERE id=?", (device["id"],)).fetchone())
         await hub.broadcast({"type": "device_update", "data": updated})
@@ -253,6 +285,31 @@ def topology():
         devices = [device_dict(db, row) for row in db.execute("SELECT * FROM devices ORDER BY id").fetchall()]
         links = [row_dict(row) for row in db.execute("SELECT * FROM topology_links ORDER BY id").fetchall()]
         return {"devices": devices, "links": links}
+
+
+@app.post("/api/topology/discover")
+async def discover_topology_now():
+    """Refresh interfaces and neighbours now instead of waiting for the next poll."""
+    with connect() as db:
+        devices = [row_dict(row) for row in db.execute("SELECT * FROM devices").fetchall()]
+    await asyncio.gather(*(poll_one(device) for device in devices), return_exceptions=True)
+    return topology()
+
+
+@app.post("/api/topology/endpoints", status_code=201)
+def add_topology_endpoint(payload: TopologyEndpointCreate):
+    """Add a VPCS/PC manually, because it cannot advertise LLDP/CDP via SNMP."""
+    with connect() as db:
+        device = db.execute("SELECT id FROM devices WHERE id=?", (payload.local_device_id,)).fetchone()
+        interface = db.execute("SELECT id FROM interfaces WHERE device_id=? AND if_index=?", (payload.local_device_id, payload.local_if_index)).fetchone()
+        if not device or not interface:
+            raise HTTPException(404, "Switch or interface not found")
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = db.execute(
+            "INSERT INTO topology_links(local_device_id, local_if_index, remote_device_name, remote_port_name, protocol, discovered_at) VALUES(?,?,?,?,?,?)",
+            (payload.local_device_id, payload.local_if_index, payload.endpoint_name.strip(), payload.remote_port_name.strip(), "MANUAL", now),
+        )
+        return row_dict(db.execute("SELECT * FROM topology_links WHERE id=?", (cursor.lastrowid,)).fetchone())
 
 
 @app.websocket("/ws")

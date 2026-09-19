@@ -33,3 +33,11 @@ class DemoTrapCreate(BaseModel):
     device_id: int = 1
     if_index: int = 1
     event_type: Literal["linkUp", "linkDown"] = "linkDown"
+
+
+class TopologyEndpointCreate(BaseModel):
+    """A non-SNMP endpoint, such as a VPCS host, drawn on the topology map."""
+    local_device_id: int
+    local_if_index: int
+    endpoint_name: str = Field(min_length=1, max_length=80)
+    remote_port_name: str = Field(default="eth0", min_length=1, max_length=80)
